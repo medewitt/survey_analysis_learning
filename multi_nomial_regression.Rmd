@@ -1,0 +1,131 @@
+---
+title: "Multi-Nominal Regression"
+author: "Michael DeWitt"
+date: "May 14, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Multinomial Regression
+
+From http://data.princeton.edu/wws509/r/c6s5.html
+
+```{r}
+require(nnet)
+copen <- read.table("http://data.princeton.edu/wws509/datasets/copen.dat")
+dplyr::glimpse(copen)
+```
+
+
+
+We will treat satisfaction as the outcome and type of housing, 
+feeling of influence and contact with the neighbors as categorical predictors. 
+The data are grouped as in the earlier example, but the layout is long rather than wide. 
+It corresponds to the way one would enter individual data, with an additional colum n showing the number of observations in each group.
+
+It will be useful for comparison purposes to calculate the log-likelihood for the saturated multinomial logit model, where each of the 24 combinations of housing type, influence and contact, has its own distribution.
+
+```{r}
+
+copen$g <- rep(1:24,rep(3,24))
+
+msat <- multinom(satisfaction ~ as.factor(g), weights=n, data=copen)
+```
+
+The log-likelihood is -1715.7. You can verify that this is sum(n*log(p)) where n are the counts and p the proportions in each category of satisfaction within each of the 24 groups.
+
+```{r}
+logLik(msat)
+```
+
+#Proportional Odds Model
+
+```{r}
+copen$satisfaction <- ordered(copen$satisfaction,c("low","medium","high"))
+
+copen$housing   <- relevel(copen$housing,  ref="tower")
+
+copen$influence <- factor(copen$influence,c("low","medium","high"))
+
+copen$contact   <- relevel(copen$contact,  ref="low")
+
+require(MASS)
+
+madd <- polr(satisfaction ~ housing + influence + contact, weights=n, data=copen)
+
+summary(madd)
+
+logLik(madd)
+
+2*(logLik(msat) - logLik(madd))
+
+```
+
+The log-likelihood is -1739.6, so the deviance for this model compared to the saturated multinomial model is 47.7 on 40 d.f. This deviance is not much more than one would expect when saving 40 parameters, so we have no evidence against the additive model. To be thorough, however, we will explore a few interactions just in case the deviance is concentrated on a few d.f.
+
+We could also compare the model with a saturated ordered logit model, which is easily done here by treating g as a factor. That would give a chi-squared test of 32.69 on 17 d.f. This test focuses on posible interactions within the single equation model. The comparison against the multi-equation model is a bit more stringent.
+
+```{r}
+mint <- update(madd, . ~ . + housing:influence)
+mint2 <- polr(satisfaction ~ contact + housing:influence, weights=n, data=copen)
+HI <- matrix(c(coef(mint2)[-1],0), 4, 3)
+HI <- (HI - HI[1,1])/(pi/sqrt(3)) # make 1,1 the reference, express as sd
+rownames(HI) <- levels(copen$housing)
+colnames(HI) <- levels(copen$influence)
+trio <- c("#ddeeff","#80aae6", "#3366cc")
+barplot(t(HI), beside=TRUE, col=trio, border=NA)
+legend("bottomleft", fill=trio, legend=levels(copen$influence), bty="n")
+```
+
+Satisfaction with housing conditions is highest for residents of tower blocks who feel they have high influence, and lowest for residents of terraced houses with low influence. Satisfaction increases with influence in each type of housing, but the difference is largest for terraced houses and apartments than atrium houses and towers.
+
+Another way to present the results is by focusing on the effects of influence within each type of housing or, alternatively, on the effects of housing type within each category of influence. All we need to do is substract the first row (or the first colum) from our predicted values:
+
+```{r}
+quartet <- c("#ddeeff", "#9dc1ee","#6593dd", "#3366cc")
+
+par(mfrow=c(1,2))
+
+barplot(apply(HI,1,function(x)x-x[1]), beside=TRUE, col=trio, border=NA)
+
+legend("toplef", fill=trio, legend=levels(copen$influence), bty="n")
+
+barplot(apply(HI,2,function(x)x-x[1]), beside=TRUE, col=quartet, border=NA)
+
+legend("bottomright", fill=quartet, legend=levels(copen$housing), bty="n")
+```
+On the left panel we see more clearly the differences by influence in each type of housing. As noted above having influence is good, particularly of you live in a terraced house or apartments. The right panel shows differences by type of housing within categories of influence. Tower residents are generally speaking more satisfied than residents of other types of housing, and the differences tend to be larger when influence is low.
+
+## PRediction
+
+```{r}
+copen$probs <- predict(mint, type="probs")
+
+towerlow <- subset(copen,  housing=="tower" & influence =="low" & satisfaction=="low")
+
+towerlow[,c("contact","probs")]
+
+```
+
+We see that among tower tenants with low influence, those with high contact with their neighbors have a higher probability of high satisfaction and a lower probability of medium or low satisfaction, than those with low contact with the neighbors.
+
+# The Ordered Probit Model
+
+```{r}
+mpadd <- polr(satisfaction ~ housing + contact + influence, weights=n, data=copen, method="probit")
+summary(mpadd)
+logLik(mpadd)
+deviance(mpadd) - deviance(msat)
+```
+The model has a log-likelihood of -1739.8, a little bit below that of the additive ordered logit. This is also reflected in the slightly higher deviance.
+
+Next we add the housing by influence interaction
+
+```{r}
+mpint <- polr(update(mpadd, . ~ . + housing:influence), method="probit")
+summary(mpint)
+ deviance(mpint) - deviance(msat)
+```
+
